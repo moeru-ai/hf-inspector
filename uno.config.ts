@@ -1,5 +1,7 @@
+import type { Preset } from 'unocss'
+
 import { presetChromatic } from '@proj-airi/unocss-preset-chromatic'
-import { defineConfig, mergeConfigs, type Preset, presetAttributify, presetIcons, presetTypography, presetWebFonts, presetWind3, transformerDirectives, transformerVariantGroup } from 'unocss'
+import { defineConfig, mergeConfigs, presetAttributify, presetIcons, presetTypography, presetWebFonts, presetWind3, transformerDirectives, transformerVariantGroup } from 'unocss'
 import { presetScrollbar } from 'unocss-preset-scrollbar'
 
 export function safelistAllPrimaryBackgrounds(): string[] {
