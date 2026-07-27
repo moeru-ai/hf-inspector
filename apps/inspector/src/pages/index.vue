@@ -14,6 +14,13 @@ interface LocalMetadata {
   value: string
 }
 
+interface LocalModelFile {
+  name: string
+  path: string
+  size: number
+  format: string
+}
+
 interface CacheItem {
   id: string
   type: ItemType
@@ -33,6 +40,7 @@ interface CacheItem {
   folderFileCount?: number
   folderSize?: number
   folderFormats?: string[]
+  localFiles?: LocalModelFile[]
   localMetadata?: LocalMetadata[]
   error?: string
 }
@@ -296,8 +304,7 @@ function getRelativePath(file: File) {
 }
 
 async function processLocalModelData(fileList: File[]): Promise<CacheItem[]> {
-  const items: CacheItem[] = []
-  const folders = new Map<string, { fileCount: number, size: number, formats: Set<string> }>()
+  const folders = new Map<string, { category: string, files: LocalModelFile[], size: number, formats: Set<string> }>()
   const configMetadata = new Map<string, LocalMetadata[]>()
 
   for (const file of fileList) {
@@ -324,39 +331,42 @@ async function processLocalModelData(fileList: File[]): Promise<CacheItem[]> {
     if (!modelExtensions.has(extension))
       continue
 
-    const folder = folders.get(folderPath) || { fileCount: 0, size: 0, formats: new Set<string>() }
-    folder.fileCount++
+    const folder = folders.get(folderPath) || {
+      category: category && comfyCategories.has(category) ? category : category || 'other',
+      files: [],
+      size: 0,
+      formats: new Set<string>(),
+    }
+    folder.files.push({ name: file.name, path: relativePath, size: file.size, format: extension.toUpperCase() })
     folder.size += file.size
     folder.formats.add(extension.toUpperCase())
     folders.set(folderPath, folder)
-
-    items.push({
-      id: relativePath,
-      type: 'local',
-      name: file.name,
-      path: relativePath,
-      size: file.size,
-      category: category && comfyCategories.has(category) ? category : category || 'other',
-      fileFormat: extension.toUpperCase(),
-      folderPath,
-    })
   }
 
-  items.forEach((item) => {
-    const folder = folders.get(item.folderPath!)
-    if (!folder)
-      return
-    item.folderFileCount = folder.fileCount
-    item.folderSize = folder.size
-    item.folderFormats = [...folder.formats].sort()
-    item.localMetadata = configMetadata.get(item.folderPath!)
-  })
-
-  return items.sort((a, b) => b.size - a.size)
+  return [...folders.entries()]
+    .map(([folderPath, folder]) => ({
+      id: folderPath,
+      type: 'local' as const,
+      name: getFolderName(folderPath),
+      path: folderPath,
+      size: folder.size,
+      category: folder.category,
+      folderPath,
+      folderFileCount: folder.files.length,
+      folderSize: folder.size,
+      folderFormats: [...folder.formats].sort(),
+      localFiles: folder.files.sort((a, b) => b.size - a.size),
+      localMetadata: configMetadata.get(folderPath),
+    }))
+    .sort((a, b) => b.size - a.size)
 }
 
 function getFolderPath(path: string) {
   return path.split('/').slice(0, -1).join('/')
+}
+
+function getFolderName(path: string) {
+  return path.split('/').filter(Boolean).pop() || path
 }
 
 function getLocalMetadata(config: unknown): LocalMetadata[] {
@@ -503,8 +513,8 @@ function formatBytes(bytes: number, decimals = 2) {
                     {{ item.name }}
                   </p>
                   <div class="flex flex-shrink-0 items-center gap-2">
-                    <button v-if="isSupported" title="Copy ID" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(item.name)">
-                      <div v-if="copied && copiedText === item.name" class="i-solar:check-read-line-duotone text-green-500" />
+                    <button v-if="isSupported" :title="item.type === 'local' ? 'Copy Folder Path' : 'Copy ID'" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(item.type === 'local' ? item.path : item.name)">
+                      <div v-if="copied && copiedText === (item.type === 'local' ? item.path : item.name)" class="i-solar:check-read-line-duotone text-green-500" />
                       <div v-else class="i-solar:copy-bold-duotone" />
                     </button>
                     <a v-if="item.type !== 'local'" :href="getHuggingFaceUrl(item)" target="_blank" rel="noopener noreferrer" title="Open on Hugging Face" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop>
@@ -519,9 +529,13 @@ function formatBytes(bytes: number, decimals = 2) {
                     <div class="i-solar:diskette-line-duotone" />
                     <span>{{ formatBytes(item.size) }}</span>
                   </div>
-                  <div v-if="item.fileFormat" class="min-w-0 flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
+                  <div v-if="item.fileFormat || item.folderFormats" class="min-w-0 flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
                     <div class="i-solar:file-text-line-duotone" />
-                    <span class="truncate">{{ item.fileFormat }}</span>
+                    <span class="truncate">{{ item.fileFormat || item.folderFormats?.join(', ') }}</span>
+                  </div>
+                  <div v-if="item.type === 'local' && item.folderFileCount" class="min-w-0 flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
+                    <div class="i-solar:document-text-line-duotone" />
+                    <span>{{ item.folderFileCount }} {{ item.folderFileCount === 1 ? 'file' : 'files' }}</span>
                   </div>
                   <!-- Chip for model format -->
                   <div v-if="item.modelFormat && item.modelFormat !== 'Unknown'" class="min-w-0 flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800" :title="item.modelFormat">
@@ -554,20 +568,21 @@ function formatBytes(bytes: number, decimals = 2) {
               <div class="grid grid-cols-1 gap-x-4 gap-y-2">
                 <template v-if="item.type === 'local'">
                   <div class="grid grid-cols-[max-content_1fr_auto] items-center gap-x-2">
-                    <strong class="text-neutral-600 dark:text-neutral-400">Relative Path:</strong>
+                    <strong class="text-neutral-600 dark:text-neutral-400">Path:</strong>
                     <code class="truncate break-all font-mono" :title="item.path">{{ item.path }}</code>
-                    <button v-if="isSupported" title="Copy Relative Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(item.path)">
+                    <button v-if="isSupported" title="Copy Folder Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(item.path)">
                       <div v-if="copied && copiedText === item.path" class="i-solar:check-read-line-duotone text-green-500" />
                       <div v-else class="i-solar:copy-bold-duotone" />
                     </button>
                   </div>
-                  <div class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
-                    <strong class="text-neutral-600 dark:text-neutral-400">Path:</strong>
-                    <code class="break-all font-mono">{{ item.folderPath || item.category || 'other' }}</code>
-                  </div>
-                  <div v-if="item.folderFileCount && item.folderSize !== undefined" class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
-                    <strong class="text-neutral-600 dark:text-neutral-400">Contents:</strong>
-                    <span>{{ item.folderFileCount }} model {{ item.folderFileCount === 1 ? 'file' : 'files' }} · {{ formatBytes(item.folderSize) }} · {{ item.folderFormats?.join(', ') }}</span>
+                  <div v-if="item.localFiles" class="grid grid-cols-[max-content_1fr] items-start gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Model files:</strong>
+                    <ul class="space-y-1">
+                      <li v-for="file in item.localFiles" :key="file.path" class="flex flex-wrap items-center justify-between gap-x-2 font-mono">
+                        <span class="break-all">{{ file.name }}</span>
+                        <span class="text-neutral-500">{{ formatBytes(file.size) }} · {{ file.format }}</span>
+                      </li>
+                    </ul>
                   </div>
                   <template v-for="metadata in item.localMetadata" :key="metadata.label">
                     <div class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
