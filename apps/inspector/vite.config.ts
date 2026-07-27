@@ -21,6 +21,7 @@ export default defineConfig({
 
     LFS(),
     SpaceCard({
+      root: resolve(import.meta.dirname, '..', '..'),
       title: 'HuggingFace Inspector',
       emoji: '🧐',
       colorFrom: 'yellow',

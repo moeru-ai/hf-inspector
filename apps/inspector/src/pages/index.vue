@@ -6,10 +6,17 @@ import { computed, ref } from 'vue'
 // --- Component Interface & State ---
 
 type ModelFormat = 'Sharded Safetensors' | 'ONNX' | 'Single File' | 'Unknown'
+type ItemType = 'model' | 'dataset' | 'local' | 'unknown'
+type InspectorMode = 'huggingface' | 'local'
+
+interface LocalMetadata {
+  label: string
+  value: string
+}
 
 interface CacheItem {
   id: string
-  type: 'model' | 'dataset' | 'unknown'
+  type: ItemType
   name: string
   path: string
   size: number
@@ -20,6 +27,13 @@ interface CacheItem {
     path: string
     oid: string
   }
+  category?: string
+  fileFormat?: string
+  folderPath?: string
+  folderFileCount?: number
+  folderSize?: number
+  folderFormats?: string[]
+  localMetadata?: LocalMetadata[]
   error?: string
 }
 
@@ -30,6 +44,7 @@ const selectedItemId = ref<string | null>(null)
 const searchTerm = ref('')
 const isDragging = ref(false)
 const fileInputRef = ref<HTMLInputElement | null>(null)
+const inspectorMode = ref<InspectorMode>('huggingface')
 
 // --- VueUse Composables ---
 const { copy, copied, text: copiedText, isSupported } = useClipboard({ legacy: true, source: '' })
@@ -53,6 +68,8 @@ const filteredItems = computed(() => {
 const totalSize = computed(() => {
   return cacheItems.value.reduce((acc, item) => acc + item.size, 0)
 })
+
+const modeLabel = computed(() => inspectorMode.value === 'huggingface' ? 'Hugging Face cache' : 'Local model library')
 
 // --- Event Handlers & Logic ---
 
@@ -85,16 +102,12 @@ async function handleFileChange(fileList: File[]) {
   cacheItems.value = []
   requestQueue.value = [] // Clear any previous queue
 
-  const isHubDir = fileList.some(f => (f as any).webkitRelativePath.includes('/blobs/'))
-  if (!isHubDir) {
-    error.value = 'This does not look like a valid "hub" directory. Please ensure you select the correct folder.'
-    isLoading.value = false
-    return
-  }
+  const isHubDir = fileList.some(f => getRelativePath(f).includes('/blobs/'))
+  inspectorMode.value = isHubDir ? 'huggingface' : 'local'
 
   try {
     // Phase 1: Local processing. Fast and offline.
-    const items = await processCacheData(fileList)
+    const items = isHubDir ? await processCacheData(fileList) : await processLocalModelData(fileList)
     cacheItems.value = items
 
     // Phase 2: Enqueue remote resolution tasks for each model.
@@ -244,7 +257,7 @@ async function fetchRepoTree(repoName: string, revision: string, subfolder?: str
 async function processCacheData(fileList: File[]): Promise<CacheItem[]> {
   const fileTree: Record<string, File[]> = {}
   for (const file of fileList) {
-    const pathParts = (file as any).webkitRelativePath.split('/')
+    const pathParts = getRelativePath(file).split('/')
     if (pathParts.length < 2)
       continue
     const rootDir = pathParts[1]
@@ -263,9 +276,9 @@ async function processCacheData(fileList: File[]): Promise<CacheItem[]> {
     let snapshot: string | undefined
     let itemError: string | undefined
     try {
-      const blobFiles = itemFiles.filter(f => (f as any).webkitRelativePath.includes('/blobs/'))
+      const blobFiles = itemFiles.filter(f => getRelativePath(f).includes('/blobs/'))
       totalSize = blobFiles.reduce((sum, f) => sum + f.size, 0)
-      const refFile = itemFiles.find(f => (f as any).webkitRelativePath.endsWith('/refs/main'))
+      const refFile = itemFiles.find(f => getRelativePath(f).endsWith('/refs/main'))
       if (refFile)
         snapshot = (await refFile.text()).trim()
     }
@@ -273,6 +286,98 @@ async function processCacheData(fileList: File[]): Promise<CacheItem[]> {
     processedItems.push({ id: dirName, type, name, path: dirName, size: totalSize, snapshot, error: itemError })
   }
   return processedItems.sort((a, b) => b.size - a.size)
+}
+
+const modelExtensions = new Set(['safetensors', 'ckpt', 'bin', 'pt', 'pth', 'gguf', 'onnx'])
+const comfyCategories = new Set(['checkpoints', 'loras', 'vae', 'unet', 'clip', 'clip_vision', 'controlnet', 'upscale_models', 'embeddings', 'diffusion_models', 'text_encoders'])
+
+function getRelativePath(file: File) {
+  return (file as File & { webkitRelativePath?: string }).webkitRelativePath || file.name
+}
+
+async function processLocalModelData(fileList: File[]): Promise<CacheItem[]> {
+  const items: CacheItem[] = []
+  const folders = new Map<string, { fileCount: number, size: number, formats: Set<string> }>()
+  const configMetadata = new Map<string, LocalMetadata[]>()
+
+  for (const file of fileList) {
+    const relativePath = getRelativePath(file)
+    if (!['config.json', 'configuration.json'].includes(file.name) || file.size > 1024 * 1024)
+      continue
+
+    try {
+      configMetadata.set(getFolderPath(relativePath), getLocalMetadata(JSON.parse(await file.text())))
+    }
+    catch {
+      // Configuration files are optional and may not be JSON.
+    }
+  }
+
+  for (const file of fileList) {
+    const relativePath = getRelativePath(file)
+    const pathParts = relativePath.split('/')
+    const extension = file.name.split('.').pop()?.toLowerCase() || 'unknown'
+    const modelsIndex = pathParts.lastIndexOf('models')
+    const category = modelsIndex >= 0 ? pathParts[modelsIndex + 1] : pathParts.length > 2 ? pathParts[1] : undefined
+    const folderPath = getFolderPath(relativePath)
+
+    if (!modelExtensions.has(extension))
+      continue
+
+    const folder = folders.get(folderPath) || { fileCount: 0, size: 0, formats: new Set<string>() }
+    folder.fileCount++
+    folder.size += file.size
+    folder.formats.add(extension.toUpperCase())
+    folders.set(folderPath, folder)
+
+    items.push({
+      id: relativePath,
+      type: 'local',
+      name: file.name,
+      path: relativePath,
+      size: file.size,
+      category: category && comfyCategories.has(category) ? category : category || 'other',
+      fileFormat: extension.toUpperCase(),
+      folderPath,
+    })
+  }
+
+  items.forEach((item) => {
+    const folder = folders.get(item.folderPath!)
+    if (!folder)
+      return
+    item.folderFileCount = folder.fileCount
+    item.folderSize = folder.size
+    item.folderFormats = [...folder.formats].sort()
+    item.localMetadata = configMetadata.get(item.folderPath!)
+  })
+
+  return items.sort((a, b) => b.size - a.size)
+}
+
+function getFolderPath(path: string) {
+  return path.split('/').slice(0, -1).join('/')
+}
+
+function getLocalMetadata(config: unknown): LocalMetadata[] {
+  if (!config || typeof config !== 'object' || Array.isArray(config))
+    return []
+
+  const data = config as Record<string, unknown>
+  const metadata: LocalMetadata[] = []
+  const add = (label: string, value: unknown) => {
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean')
+      metadata.push({ label, value: String(value) })
+    else if (Array.isArray(value) && value.every(entry => typeof entry === 'string'))
+      metadata.push({ label, value: value.join(', ') })
+  }
+
+  add('Architectures', data.architectures)
+  add('Architecture', data.architecture || data.model_type)
+  add('Version', data.version)
+  add('Sample rate', data.sample_rate)
+  add('Quantization', data.quantize_bits && `${data.quantize_bits}-bit`)
+  return metadata
 }
 
 // --- Utility Functions ---
@@ -324,7 +429,7 @@ function formatBytes(bytes: number, decimals = 2) {
     <!-- Initial State: Directory Selector -->
     <div v-if="cacheItems.length === 0 && !isLoading" class="h-full flex flex-1 flex-col items-center justify-center gap-4">
       <p class="mt-2 text-sm text-neutral-600 dark:text-neutral-400">
-        Drop your <code class="rounded bg-neutral-200 p-1 dark:bg-neutral-800">.cache/huggingface/hub</code> directory below to get started.
+        Drop a Hugging Face <code class="rounded bg-neutral-200 p-1 dark:bg-neutral-800">hub</code> cache or a local model folder (such as <code class="rounded bg-neutral-200 p-1 dark:bg-neutral-800">ComfyUI/models</code>) below to get started.
       </p>
       <label
         class="relative h-full max-w-4xl min-h-[200px] w-full flex flex-col cursor-pointer items-center justify-center border-2 rounded-xl border-dashed p-6 opacity-95 shadow-sm transition-all duration-300 hover:shadow-md"
@@ -335,7 +440,7 @@ function formatBytes(bytes: number, decimals = 2) {
         <div class="pointer-events-none flex flex-col items-center" :class="[isDragging ? 'text-primary-500 dark:text-primary-400' : 'text-neutral-400 dark:text-neutral-500']">
           <div class="i-solar:upload-square-line-duotone mb-2 text-5xl" />
           <p class="text-center text-lg font-medium">Select or Drop Directory</p>
-          <p class="text-center text-sm">{{ isDragging ? 'Release to upload' : 'Click to select the "hub" folder' }}</p>
+          <p class="text-center text-sm">{{ isDragging ? 'Release to inspect' : 'Click to select a cache or model folder' }}</p>
         </div>
       </label>
     </div>
@@ -368,7 +473,7 @@ function formatBytes(bytes: number, decimals = 2) {
               :required="false"
             />
             <div class="w-full whitespace-nowrap text-right text-sm text-neutral-400 sm:w-auto dark:text-neutral-700">
-              Found <strong>{{ filteredItems.length }}</strong> items. Total size: <strong>{{ formatBytes(totalSize) }}</strong>
+              {{ modeLabel }}: <strong>{{ filteredItems.length }}</strong> items. Total size: <strong>{{ formatBytes(totalSize) }}</strong>
             </div>
           </label>
         </div>
@@ -387,8 +492,9 @@ function formatBytes(bytes: number, decimals = 2) {
                   <div class="flex-shrink-0">
                     <div v-if="item.type === 'model'" class="i-solar:box-minimalistic-bold-duotone text-xl text-blue-500" />
                     <div v-else-if="item.type === 'dataset'" class="i-solar:database-bold-duotone text-xl text-green-500" />
+                    <div v-else-if="item.type === 'local'" class="i-solar:folder-with-files-bold-duotone text-xl text-purple-500" />
                   </div>
-                  <span :class="{ 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300': item.type === 'model', 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300': item.type === 'dataset' }" class="rounded-full px-2.5 py-1 text-xs font-semibold capitalize">{{ item.type }}</span>
+                  <span :class="{ 'bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300': item.type === 'model', 'bg-green-100 text-green-800 dark:bg-green-900/50 dark:text-green-300': item.type === 'dataset', 'bg-purple-100 text-purple-800 dark:bg-purple-900/50 dark:text-purple-300': item.type === 'local' }" class="rounded-full px-2.5 py-1 text-xs font-semibold capitalize">{{ item.type === 'local' ? `Folder: ${item.category || 'other'}` : item.type }}</span>
                 </div>
 
                 <!-- Line 2: Model ID & Actions -->
@@ -401,7 +507,7 @@ function formatBytes(bytes: number, decimals = 2) {
                       <div v-if="copied && copiedText === item.name" class="i-solar:check-read-line-duotone text-green-500" />
                       <div v-else class="i-solar:copy-bold-duotone" />
                     </button>
-                    <a :href="getHuggingFaceUrl(item)" target="_blank" rel="noopener noreferrer" title="Open on Hugging Face" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop>
+                    <a v-if="item.type !== 'local'" :href="getHuggingFaceUrl(item)" target="_blank" rel="noopener noreferrer" title="Open on Hugging Face" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop>
                       <div class="i-solar:square-arrow-right-up-line-duotone" />
                     </a>
                   </div>
@@ -412,6 +518,10 @@ function formatBytes(bytes: number, decimals = 2) {
                   <div class="flex items-center gap-1.5">
                     <div class="i-solar:diskette-line-duotone" />
                     <span>{{ formatBytes(item.size) }}</span>
+                  </div>
+                  <div v-if="item.fileFormat" class="min-w-0 flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800">
+                    <div class="i-solar:file-text-line-duotone" />
+                    <span class="truncate">{{ item.fileFormat }}</span>
                   </div>
                   <!-- Chip for model format -->
                   <div v-if="item.modelFormat && item.modelFormat !== 'Unknown'" class="min-w-0 flex items-center gap-1.5 rounded-full bg-neutral-100 px-2 py-1 dark:bg-neutral-800" :title="item.modelFormat">
@@ -442,55 +552,81 @@ function formatBytes(bytes: number, decimals = 2) {
           <TransitionVertical>
             <div v-if="selectedItemId === item.id" class="px-4 py-3 text-xs dark:border-neutral-800">
               <div class="grid grid-cols-1 gap-x-4 gap-y-2">
-                <!-- Symlink Path -->
-                <div class="grid grid-cols-[max-content_1fr_auto] items-center gap-x-2">
-                  <strong class="text-neutral-600 dark:text-neutral-400">Symlink Path:</strong>
-                  <code v-if="getSymlinkPath(item)" class="truncate break-all font-mono" :title="getSymlinkPath(item) || ''">{{ getSymlinkPath(item) }}</code>
-                  <span v-else class="text-neutral-500 font-mono">Resolving...</span>
-                  <button v-if="isSupported && getSymlinkPath(item)" title="Copy Symlink Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(getSymlinkPath(item) || '')">
-                    <div v-if="copied && copiedText === getSymlinkPath(item)" class="i-solar:check-read-line-duotone text-green-500" />
-                    <div v-else class="i-solar:copy-bold-duotone" />
-                  </button>
-                </div>
-                <!-- Actual Path -->
-                <div class="grid grid-cols-[max-content_1fr_auto] items-center gap-x-2">
-                  <strong class="text-neutral-600 dark:text-neutral-400">Actual Path:</strong>
-                  <code v-if="getActualPath(item)" class="truncate break-all font-mono" :title="getActualPath(item) || ''">{{ getActualPath(item) }}</code>
-                  <span v-else class="text-neutral-500 font-mono">Resolving...</span>
-                  <button v-if="isSupported && getActualPath(item)" title="Copy Actual Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(getActualPath(item) || '')">
-                    <div v-if="copied && copiedText === getActualPath(item)" class="i-solar:check-read-line-duotone text-green-500" />
-                    <div v-else class="i-solar:copy-bold-duotone" />
-                  </button>
-                </div>
-                <!-- Snapshot -->
-                <div class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
-                  <strong class="text-neutral-600 dark:text-neutral-400">Snapshot:</strong>
-                  <code v-if="item.snapshot" class="break-all font-mono">{{ item.snapshot }}</code>
-                  <span v-else class="text-neutral-500">N/A</span>
-                </div>
-                <!-- Architectures -->
-                <template v-if="item.type === 'model'">
-                  <div class="grid grid-cols-[max-content_1fr] items-start gap-x-2">
-                    <strong class="text-neutral-600 dark:text-neutral-400">Architectures:</strong>
-                    <div>
-                      <ul v-if="item.architectures && !['Not specified', 'No config.json in repo', 'Config blob not in cache', 'Resolution failed'].includes(item.architectures[0])" class="list-disc list-inside">
-                        <li v-for="arch in item.architectures" :key="arch" class="font-mono">
-                          {{ arch }}
-                        </li>
-                      </ul>
-                      <span v-else-if="item.architectures" class="text-neutral-500 font-mono">{{ item.architectures[0] }}</span>
-                      <span v-else class="text-neutral-500">Resolving...</span>
+                <template v-if="item.type === 'local'">
+                  <div class="grid grid-cols-[max-content_1fr_auto] items-center gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Relative Path:</strong>
+                    <code class="truncate break-all font-mono" :title="item.path">{{ item.path }}</code>
+                    <button v-if="isSupported" title="Copy Relative Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(item.path)">
+                      <div v-if="copied && copiedText === item.path" class="i-solar:check-read-line-duotone text-green-500" />
+                      <div v-else class="i-solar:copy-bold-duotone" />
+                    </button>
+                  </div>
+                  <div class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Path:</strong>
+                    <code class="break-all font-mono">{{ item.folderPath || item.category || 'other' }}</code>
+                  </div>
+                  <div v-if="item.folderFileCount && item.folderSize !== undefined" class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Contents:</strong>
+                    <span>{{ item.folderFileCount }} model {{ item.folderFileCount === 1 ? 'file' : 'files' }} · {{ formatBytes(item.folderSize) }} · {{ item.folderFormats?.join(', ') }}</span>
+                  </div>
+                  <template v-for="metadata in item.localMetadata" :key="metadata.label">
+                    <div class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
+                      <strong class="text-neutral-600 dark:text-neutral-400">{{ metadata.label }}:</strong>
+                      <span class="break-all font-mono">{{ metadata.value }}</span>
                     </div>
-                  </div>
+                  </template>
                 </template>
-                <!-- Error -->
-                <template v-if="item.error">
-                  <div class="grid grid-cols-[max-content_1fr] items-start gap-x-2">
-                    <strong class="text-red-500">Error Details:</strong>
-                    <p class="text-red-500 font-mono">
-                      {{ item.error }}
-                    </p>
+                <template v-else>
+                  <!-- Symlink Path -->
+                  <div class="grid grid-cols-[max-content_1fr_auto] items-center gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Symlink Path:</strong>
+                    <code v-if="getSymlinkPath(item)" class="truncate break-all font-mono" :title="getSymlinkPath(item) || ''">{{ getSymlinkPath(item) }}</code>
+                    <span v-else class="text-neutral-500 font-mono">Resolving...</span>
+                    <button v-if="isSupported && getSymlinkPath(item)" title="Copy Symlink Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(getSymlinkPath(item) || '')">
+                      <div v-if="copied && copiedText === getSymlinkPath(item)" class="i-solar:check-read-line-duotone text-green-500" />
+                      <div v-else class="i-solar:copy-bold-duotone" />
+                    </button>
                   </div>
+                  <!-- Actual Path -->
+                  <div class="grid grid-cols-[max-content_1fr_auto] items-center gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Actual Path:</strong>
+                    <code v-if="getActualPath(item)" class="truncate break-all font-mono" :title="getActualPath(item) || ''">{{ getActualPath(item) }}</code>
+                    <span v-else class="text-neutral-500 font-mono">Resolving...</span>
+                    <button v-if="isSupported && getActualPath(item)" title="Copy Actual Path" class="text-neutral-400 transition-colors hover:text-primary-500 dark:hover:text-primary-400" @click.stop="copy(getActualPath(item) || '')">
+                      <div v-if="copied && copiedText === getActualPath(item)" class="i-solar:check-read-line-duotone text-green-500" />
+                      <div v-else class="i-solar:copy-bold-duotone" />
+                    </button>
+                  </div>
+                  <!-- Snapshot -->
+                  <div class="grid grid-cols-[max-content_1fr] items-center gap-x-2">
+                    <strong class="text-neutral-600 dark:text-neutral-400">Snapshot:</strong>
+                    <code v-if="item.snapshot" class="break-all font-mono">{{ item.snapshot }}</code>
+                    <span v-else class="text-neutral-500">N/A</span>
+                  </div>
+                  <!-- Architectures -->
+                  <template v-if="item.type === 'model'">
+                    <div class="grid grid-cols-[max-content_1fr] items-start gap-x-2">
+                      <strong class="text-neutral-600 dark:text-neutral-400">Architectures:</strong>
+                      <div>
+                        <ul v-if="item.architectures && !['Not specified', 'No config.json in repo', 'Config blob not in cache', 'Resolution failed'].includes(item.architectures[0])" class="list-disc list-inside">
+                          <li v-for="arch in item.architectures" :key="arch" class="font-mono">
+                            {{ arch }}
+                          </li>
+                        </ul>
+                        <span v-else-if="item.architectures" class="text-neutral-500 font-mono">{{ item.architectures[0] }}</span>
+                        <span v-else class="text-neutral-500">Resolving...</span>
+                      </div>
+                    </div>
+                  </template>
+                  <!-- Error -->
+                  <template v-if="item.error">
+                    <div class="grid grid-cols-[max-content_1fr] items-start gap-x-2">
+                      <strong class="text-red-500">Error Details:</strong>
+                      <p class="text-red-500 font-mono">
+                        {{ item.error }}
+                      </p>
+                    </div>
+                  </template>
                 </template>
               </div>
             </div>
@@ -507,6 +643,7 @@ function formatBytes(bytes: number, decimals = 2) {
     >
       <div class="i-solar:folder-with-files-line-duotone text-2xl" />
     </button>
+
     <input ref="fileInputRef" type="file" webkitdirectory class="hidden" @change="onFileSelect">
   </div>
 </template>
