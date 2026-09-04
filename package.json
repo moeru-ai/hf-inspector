@@ -43,7 +43,7 @@
     "@unocss/eslint-plugin": "^66.5.3",
     "@unocss/preset-mini": "^66.5.3",
     "bumpp": "^10.3.1",
-    "eslint": "^9.37.0",
+    "eslint": "^10.10.0",
     "hfup": "^0.6.3",
     "rollup": "^4.52.4",
     "taze": "^19.7.0",
