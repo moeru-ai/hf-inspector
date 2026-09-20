@@ -47,7 +47,7 @@
     "splitpanes": "^4.0.4",
     "unplugin-vue-router": "^0.15.0",
     "vue": "^3.5.22",
-    "vue-router": "^4.5.1",
+    "vue-router": "^5.3.1",
     "vue-tsc": "^3.1.1"
   }
 }
