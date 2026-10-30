@@ -28,8 +28,8 @@ importers:
         specifier: ^0.1.0
         version: 0.1.0
       '@proj-airi/unocss-preset-chromatic':
-        specifier: ^1.0.0
-        version: 1.0.0
+        specifier: ^2.0.1
+        version: 2.0.1
       '@types/node':
         specifier: ^24.7.1
         version: 24.7.1
@@ -233,6 +233,7 @@ packages:
 
   '@antfu/nip@0.1.0':
     resolution: {integrity: sha512-iNSjTsty20VIdjEeulB3zRmeZKnlnMD4ACVWWvGRgBoKLJiAGN3lBVffxtiKXGSJNHuqd+djNhjRNT3t7/6Jog==}
+    deprecated: use @antfu/ni or @rizumu/nai instead
     hasBin: true
 
   '@antfu/utils@8.1.1':
@@ -622,14 +623,17 @@ packages:
   '@polka/url@1.0.0-next.29':
     resolution: {integrity: sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww==}
 
+  '@proj-airi/chromatic@2.0.1':
+    resolution: {integrity: sha512-CTZMkkqYEpUdWM1eFqQcJE2FdFKWY7NyrNYfzD4908GYcSVQaJAliVTEGVajxUfOJP0aD13BSyN7vo1PmsuW/g==}
+
   '@proj-airi/lobe-icons@1.0.13':
     resolution: {integrity: sha512-cDTTUCUioUiLjhOfZ9Y4b0uRmNhlPRj40qfv6oDXfQml+tiQSk3VQmgSKB71CYm0a/tUM+soeJ6v0oYPwT+kxA==}
 
   '@proj-airi/ui@0.7.2-beta.2':
     resolution: {integrity: sha512-EH4BA1TpOkAFKQpeYS7B1+wu9IPUj5Ht6HMLa+ta+oNI7JBfBuPNpg92y4p6wdconvBbSsizXc8/ZqMW5MPxAw==}
 
-  '@proj-airi/unocss-preset-chromatic@1.0.0':
-    resolution: {integrity: sha512-H9s4WqahCUD12WMWyAHpjvQwkaF/pnXLC94odY+V4Xy5eqmt+vH8d/eSrcXZDOCtucW6fbWc/1t4GWDBiAQJ+w==}
+  '@proj-airi/unocss-preset-chromatic@2.0.1':
+    resolution: {integrity: sha512-mXzCMxkO5113nhlG4dILCnh3WZgWBn45TEG5tQJzcOSpgqVmJNM9nLbLzB+JDDZ2sMXAo77WrRqSbvWoOlCWbQ==}
 
   '@quansync/fs@0.1.5':
     resolution: {integrity: sha512-lNS9hL2aS2NZgNW7BBj+6EBl4rOf8l+tQ0eRY6JWCI8jI2kc53gSoqbjojU0OnAWhzoXiOjFyGsHcDGePB3lhA==}
@@ -1448,6 +1452,10 @@ packages:
   csstype@3.1.3:
     resolution: {integrity: sha512-M1uQkMl8rQK/szD0LNhtqxIPLpimGm8sOBwU7lLnCpSbTyY3yeU1Vc7l4KT5zT4s/yOxHH5O7tIuuLOCnLADRw==}
 
+  culori@4.0.2:
+    resolution: {integrity: sha512-1+BhOB8ahCn4O0cep0Sh2l9KCOfOdY+BXJnKMHFFzDEouSr/el18QwXEMRlOj9UY5nCeA8UN3a/82rUWRBeyBw==}
+    engines: {node: ^12.20.0 || ^14.13.1 || >=16.0.0}
+
   debug@4.4.3:
     resolution: {integrity: sha512-RGwwWnwQvkVfavKVt22FGLw+xYSdzARwm0ru6DhTVA3umU5hZc28V3kO4stgYryrTlLpuvgI9GiijltAjNbcqA==}
     engines: {node: '>=6.0'}
@@ -1727,6 +1735,7 @@ packages:
   eslint@9.37.0:
     resolution: {integrity: sha512-XyLmROnACWqSxiGYArdef1fItQd47weqB7iwtfr9JHwRrqIXZdcFMvvEcL9xHCmL0SNsOvF0c42lWyM1U5dgig==}
     engines: {node: ^18.18.0 || ^20.9.0 || >=21.1.0}
+    deprecated: This version is no longer supported. Please see https://eslint.org/version-support for other options.
     hasBin: true
     peerDependencies:
       jiti: '*'
@@ -2992,6 +3001,7 @@ packages:
 
   unplugin-vue-router@0.15.0:
     resolution: {integrity: sha512-PyGehCjd9Ny9h+Uer4McbBjjib3lHihcyUEILa7pHKl6+rh8N7sFyw4ZkV+N30Oq2zmIUG7iKs3qpL0r+gXAaQ==}
+    deprecated: 'Merged into vuejs/router. Migrate: https://router.vuejs.org/guide/migration/v4-to-v5.html'
     peerDependencies:
       '@vue/compiler-sfc': ^3.5.17
       vue-router: ^4.5.1
@@ -3676,6 +3686,10 @@ snapshots:
 
   '@polka/url@1.0.0-next.29': {}
 
+  '@proj-airi/chromatic@2.0.1':
+    dependencies:
+      culori: 4.0.2
+
   '@proj-airi/lobe-icons@1.0.13': {}
 
   '@proj-airi/ui@0.7.2-beta.2(@nuxt/kit@3.17.4)(typescript@5.9.3)':
@@ -3689,7 +3703,9 @@ snapshots:
       - '@vue/composition-api'
       - typescript
 
-  '@proj-airi/unocss-preset-chromatic@1.0.0': {}
+  '@proj-airi/unocss-preset-chromatic@2.0.1':
+    dependencies:
+      '@proj-airi/chromatic': 2.0.1
 
   '@quansync/fs@0.1.5':
     dependencies:
@@ -4669,6 +4685,8 @@ snapshots:
       css-tree: 2.2.1
 
   csstype@3.1.3: {}
+
+  culori@4.0.2: {}
 
   debug@4.4.3:
     dependencies:
